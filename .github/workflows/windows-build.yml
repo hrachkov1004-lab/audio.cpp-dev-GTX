@@ -20,10 +20,11 @@ jobs:
           cuda: '12.4.1'
           method: 'local'
 
+      # Combined step: Initialize MSVC Environment AND run CMake Configure
       - name: Configure CMake
         shell: cmd
         run: |
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64 >nul
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release ^
             -DENGINE_ENABLE_CUDA=ON ^
             -DENGINE_ENABLE_OPENMP=OFF ^
@@ -40,9 +41,11 @@ jobs:
             -DAUDIOCPP_BUILD_NATIVE_MODEL_MANAGER=ON ^
             -DCUDAToolkit_ROOT="%CUDA_PATH%"
 
+      # Combined step: Initialize MSVC Environment AND run the compilation build
       - name: Build Targets
         shell: cmd
         run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
           cmake --build build --config Release -j %NUMBER_OF_PROCESSORS% --target audiocpp_cli audiocpp_server audiocpp_gguf
 
       - name: Bundle VC runtime
