@@ -1,51 +1,69 @@
-name: windows-build
+name: Windows CUDA 12.4 Build
 
 on:
   push:
-    branches:
-      - ci/**
-      - main
-      - dev
-      - release-0.2
-  pull_request:
-    branches:
-      - main
-      - dev
-      - release-0.2
+    branches: [ dev ]
   workflow_dispatch:
 
 jobs:
   build:
-    name: Windows CPU
+    name: Build GTX 1080 (CUDA 12.4 / SM 61)
     runs-on: windows-2022
 
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Check loader/spec sync
-        shell: pwsh
-        run: |
-          python tools/check_loader_catalog_sync.py --self-test
-          python tools/check_loader_catalog_sync.py
+      - name: Setup CUDA 12.4
+        uses: Jimver/cuda-toolkit@v0.2.36
+        with:
+          cuda: '12.4.1'
+          method: 'local'
 
-      - name: Build audiocpp_cli
-        shell: pwsh
+      - name: Configure CMake
+        shell: cmd
         run: |
-          .\scripts\build_windows.ps1 `
-            -Preset windows-cpu-release `
-            -Target audiocpp_cli
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64 >nul
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release ^
+            -DENGINE_ENABLE_CUDA=ON ^
+            -DENGINE_ENABLE_OPENMP=OFF ^
+            -DGGML_OPENMP=OFF ^
+            -DENGINE_ENABLE_CUDA_GRAPHS=OFF ^
+            -DENGINE_ENABLE_VULKAN=OFF ^
+            -DENGINE_ENABLE_METAL=OFF ^
+            -DENGINE_ENABLE_LLAMAFILE=ON ^
+            -DENGINE_ENABLE_NATIVE_CPU=ON ^
+            -DENGINE_BUILD_TESTS=OFF ^
+            -DENGINE_ENABLE_CPU_ALL_VARIANTS=ON ^
+            "-DCMAKE_CUDA_ARCHITECTURES=61" ^
+            -DAUDIOCPP_DEPLOYMENT_BUILD=ON ^
+            -DAUDIOCPP_BUILD_NATIVE_MODEL_MANAGER=ON ^
+            -DCUDAToolkit_ROOT="%CUDA_PATH%"
 
-      - name: Build audiocpp_server
-        shell: pwsh
+      - name: Build Targets
+        shell: cmd
         run: |
-          .\scripts\build_windows.ps1 `
-            -Preset windows-cpu-release `
-            -Target audiocpp_server
+          cmake --build build --config Release -j %NUMBER_OF_PROCESSORS% --target audiocpp_cli audiocpp_server audiocpp_gguf
 
-      - name: Build audiocpp_gguf
+      - name: Bundle VC runtime
         shell: pwsh
+        working-directory: build/bin
         run: |
-          .\scripts\build_windows.ps1 `
-            -Preset windows-cpu-release `
-            -Target audiocpp_gguf
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -property installationPath
+          $redist = Get-ChildItem "$vs\VC\Redist\MSVC" -Directory |
+            Sort-Object { try { [version]$_.Name } catch { [version]'0.0' } } -Descending |
+            Select-Object -First 1
+          $dir = Join-Path $redist.FullName 'x64\Microsoft.VC143.CRT'
+          if (Test-Path $dir) {
+            Get-ChildItem "$dir\*.dll" | Where-Object {
+              $_.Name -match '^(vcruntime140|msvcp140)'
+            } | Copy-Item -Destination . -ErrorAction SilentlyContinue
+          }
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: audiocpp-windows-cuda12.4-gtx1080
+          path: |
+            build/bin/*
