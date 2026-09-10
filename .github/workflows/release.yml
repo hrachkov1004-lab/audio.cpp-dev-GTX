@@ -32,6 +32,7 @@ jobs:
             -DGGML_OPENMP=OFF ^
             -DENGINE_ENABLE_CUDA_GRAPHS=OFF ^
             -DENGINE_BUILD_TESTS=OFF ^
+            -DAUDIOCPP_BUILD_NATIVE_MODEL_MANAGER=ON ^
             -DCMAKE_BUILD_TYPE=Release ..
 
       - name: Build Targets

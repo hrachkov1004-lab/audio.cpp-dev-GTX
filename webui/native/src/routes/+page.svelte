@@ -149,6 +149,7 @@
     'cosyvoice3',
     'firered_audio',
     'fireredtts3',
+    'irodori_tts',
     'meanvc2',
     'midashenglm_gen'
   ]);
@@ -246,6 +247,10 @@
       const frames = Number(value);
       if (Number.isFinite(frames) && frames > 0) duration = frames / 24;
     }
+  }
+
+  function requestText() {
+    return text.trim() ? text : (selected.default_text || '');
   }
 
   const workflowTabs = [
@@ -379,8 +384,9 @@
   $: modelGroups = groupCatalog(activeCatalog);
   $: selected = activeCatalog.find((entry) => entry.id === selectedId) || activeCatalog[0] || catalog[0];
   $: activeWorkflowSpec = workflowTabs.find((workflow) => workflow.id === activeWorkflow) || workflowTabs[0];
-  $: workflowModels = activeCatalog.filter((entry) =>
-    activeWorkflowSpec.tasks.some((task) => task === entry.task));
+  $: workflowModels = activeCatalog
+    .filter((entry) => activeWorkflowSpec.tasks.some((task) => task === entry.task))
+    .sort((left, right) => compareModelNames(left.display_name, right.display_name));
   $: filteredModelGroups = modelGroups.map((group) => ({
     ...group,
     entries: group.entries.filter((entry) => {
@@ -396,7 +402,10 @@
   $: usesDurationSecOption =
     selected?.family === 'controlfoley' ||
     selected?.family === 'midashenglm_gen';
-  $: supportsTextOnlyTts = selected?.family === 'breeze_tts' && selected?.task === 'tts';
+  $: supportsTextOnlyTts = (
+    selected?.family === 'breeze_tts' ||
+    selected?.family === 'chatterbox_turbo'
+  ) && selected?.task === 'tts';
   $: needsSource = ['asr', 'vc', 'svc', 's2s', 'sep', 'vad', 'diar', 'align', 'midi'].includes(selected?.task) ||
     isFireRedAudioEdit;
   $: acceptsSource = needsSource || selected?.task === 'gen';
@@ -423,7 +432,7 @@
     : '';
   $: showsText = ['tts', 'clon', 'gen', 's2s', 'align', 'vdes'].includes(selected?.task);
   $: supportsLiveAsr = selected?.task === 'asr' &&
-    ['voxtral_realtime', 'nemotron_asr', 'higgs_audio_stt', 'sense_asr'].includes(selected?.family);
+    ['voxtral_realtime', 'nemotron_asr', 'higgs_audio_stt', 'sense_asr', 'vibevoice_asr_streaming'].includes(selected?.family);
   $: modelInventoryLoading = server === null ||
     (Boolean(server.ui_management) && Object.keys(packageSizes).length === 0 && packageSizeState !== 'failed');
   $: selectableModelIds = new Set(activeCatalog.filter((entry) => {
@@ -992,6 +1001,9 @@
       advancedValues = { ...advancedValues, num_frames: miniMaxFramesForDuration(duration), dit_acceleration: 'none' };
     } else if (selected?.task === 'gen') {
       duration = 30;
+    }
+    if (!text.trim() && selected?.default_text) {
+      text = selected.default_text;
     }
     advancedJson = '{}';
   }
@@ -1588,8 +1600,10 @@
 
       if (['tts', 'clon', 'vdes'].includes(selected.task)) {
         if (!text.trim()) throw new StatusWarning('Enter text to generate.');
+        const effectiveChunkBudget = Math.max(40, chunkBudget);
+        if (selected.family === 'voxcpm2') options.text_chunk_size = effectiveChunkBudget;
         const chunks = longText && selected.task !== 'vdes'
-          ? splitTtsChunks(text, Math.max(40, chunkBudget))
+          ? splitTtsChunks(text, effectiveChunkBudget)
           : [text];
         const audioChunks: Blob[] = [];
         const timings: Array<Record<string, unknown>> = [];
@@ -1647,6 +1661,8 @@
         if (['gen', 's2s', 'align'].includes(selected.task) && text.trim()) request.text = text;
         if (['gen', 's2s', 'align'].includes(selected.task) && language.trim()) request.language = language;
         if (selected.task === 'gen') {
+          const resolvedText = requestText();
+          if (resolvedText) request.text = resolvedText;
           if (lyrics.trim()) request.lyrics = lyrics;
           if (!isFireRedAudioEdit) {
             if (usesDurationSecOption) options.duration_sec = duration;
@@ -2230,12 +2246,9 @@
           {/if}
           {#if selected.task === 'gen'}
             <div>
-              <label for="duration">{tr('request.duration')}</label>
+              <label for="duration">{tr('request.duration')}{#if allowsAutoDuration} <span>{tr('request.autoDuration')}</span>{/if}</label>
               <input id="duration" type="number" min={allowsAutoDuration ? -1 : 1} step="0.1" value={duration}
                 on:input={(event) => setDuration(event.currentTarget.valueAsNumber)} />
-              {#if allowsAutoDuration}
-                <small>{tr('request.autoDuration')}</small>
-              {/if}
               {#if selected.family === 'minimax_h3'}
                 <small>{tr('request.minimaxFrames', { frames: Number(advancedValues.num_frames || 0) })}</small>
               {/if}

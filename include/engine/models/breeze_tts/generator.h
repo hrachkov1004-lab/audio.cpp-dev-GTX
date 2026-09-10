@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/framework/core/attention_fallback.h"
 #include "engine/framework/runtime/session.h"
 #include "engine/models/breeze_tts/assets.h"
 #include "engine/models/breeze_tts/speech_decoder.h"
@@ -28,6 +29,11 @@ struct BreezeGenerationRequest {
     uint64_t seed = 0;
 };
 
+struct BreezeStreamEvent {
+    engine::runtime::AudioBuffer audio;
+    bool done = false;
+};
+
 class BreezeGeneratorRuntime {
 public:
     BreezeGeneratorRuntime(
@@ -35,11 +41,15 @@ public:
         engine::core::ExecutionContext & execution,
         size_t graph_arena_bytes,
         size_t weight_context_bytes,
-        engine::assets::TensorStorageType storage_type);
+        engine::assets::TensorStorageType storage_type,
+        engine::core::AttentionPreference attention_preference = engine::core::AttentionPreference::Auto);
     ~BreezeGeneratorRuntime();
 
     engine::runtime::AudioBuffer generate(const BreezeGenerationRequest & request);
     BreezeSpeechCodes encode_reference(const engine::runtime::AudioBuffer & audio) const;
+    void begin_stream(const BreezeGenerationRequest & request);
+    BreezeStreamEvent next_stream_audio(size_t max_new_frames, int64_t lookahead_margin);
+    void end_stream();
 
 private:
     struct Impl;

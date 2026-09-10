@@ -11,7 +11,8 @@
     "design"
   ],
   "modes": [
-    "offline"
+    "offline",
+    "streaming"
   ],
   "languages": [
     "zh",
@@ -126,6 +127,22 @@
         "required": false,
         "min": 0,
         "default": 0
+      },
+      {
+        "name": "stream_frames_per_event",
+        "type": "int",
+        "description": "Generated codec frames per streaming audio event.",
+        "required": false,
+        "min": 1,
+        "default": 16
+      },
+      {
+        "name": "stream_lookahead_margin",
+        "type": "int",
+        "description": "Trailing codec frames held before emission to reduce streaming boundary artifacts.",
+        "required": false,
+        "min": 0,
+        "default": 12
       }
     ],
     "session": [
@@ -160,6 +177,14 @@
         "required": false,
         "min": 0,
         "default": 1
+      },
+      {
+        "name": "attention",
+        "type": "enum",
+        "description": "Attention lowering; auto probes the backend and falls back to eager on GPUs without a flash kernel (e.g. sm70); default auto.",
+        "required": false,
+        "values": ["auto", "flash", "eager"],
+        "default": "auto"
       }
     ],
     "load": []
