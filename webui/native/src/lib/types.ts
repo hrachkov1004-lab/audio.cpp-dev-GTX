@@ -17,6 +17,9 @@ export interface CatalogEntry {
   path: string;
   task: string;
   mode: string;
+  workflow?: string;
+  weights_url?: string;
+  arena?: boolean;
   download_id?: string;
   install_packages?: InstallPackageChoice[];
   min_vram_gb?: number;
@@ -35,6 +38,8 @@ export interface CatalogEntry {
 export interface ParamSpec {
   name: string;
   type: 'slider' | 'number' | 'bool' | 'text' | 'choice';
+  scope?: 'request' | 'session';
+  session_option?: string;
   label: string;
   label_en?: string;
   info?: string;

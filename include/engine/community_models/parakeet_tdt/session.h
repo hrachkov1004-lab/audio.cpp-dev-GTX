@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/framework/model_spec/metadata.h"
+#include "engine/framework/runtime/partial_text.h"
 #include "engine/framework/runtime/session_base.h"
 #include "engine/community_models/parakeet_tdt/assets.h"
 #include "engine/community_models/parakeet_tdt/decoder.h"
@@ -13,6 +14,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+
 #include <unordered_map>
 #include <vector>
 
@@ -46,8 +48,8 @@ protected:
     engine::assets::TensorStorageType conv_weight_storage_type_ = engine::assets::TensorStorageType::Native;
     bool encoder_flash_attention_ = false;
     ParakeetFrontend frontend_;
-    std::unique_ptr<ParakeetEncoderRuntime> encoder_;
-    std::unique_ptr<ParakeetDecoderRuntime> decoder_;
+    std::unique_ptr<ParakeetFastConformerEncoderRuntime> encoder_;
+    std::unique_ptr<ParakeetTDTDecoderRuntime> decoder_;
 };
 
 class ParakeetTDTOfflineSession final
@@ -125,6 +127,9 @@ private:
     std::vector<int32_t> token_frame_indices_;
     std::vector<int32_t> token_durations_;
     runtime::StreamEventCallback stream_event_sink_;
+    // merged_decode() returns the whole transcript each time; this turns it
+    // back into the increment a partial is contracted to be.
+    runtime::PartialTextPublisher partials_;
     bool stream_started_ = false;
     bool finalized_ = false;
 };

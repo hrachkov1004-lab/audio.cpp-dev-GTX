@@ -68,17 +68,17 @@ private:
         const VibeVoiceASRRequest & request);
     VibeVoiceDecoderResult append_stream_embedding(
         const std::vector<float> & embedding,
-        VibeVoiceDecoderCachedState & state,
+        VibeVoiceQwen2CachedState & state,
         int64_t & steps);
     VibeVoiceDecoderResult append_stream_suffix(
         const std::vector<float> & embeddings,
         int64_t steps_to_append,
-        VibeVoiceDecoderCachedState & state,
+        VibeVoiceQwen2CachedState & state,
         int64_t & steps);
     std::string generate_streaming_text_chunk(
         const VibeVoiceASRRequest & request,
         VibeVoiceDecoderResult next_logits,
-        VibeVoiceDecoderCachedState & state,
+        VibeVoiceQwen2CachedState & state,
         int64_t & steps);
     std::vector<AudioChunkPlan> streaming_audio_chunk_plan(const runtime::AudioBuffer & audio) const;
     std::vector<int32_t> generate_tokens(
@@ -103,7 +103,12 @@ private:
     std::shared_ptr<const VibeVoiceASRAssets> assets_;
     size_t tokenizer_weight_context_bytes_ = 512ull * 1024ull * 1024ull;
     size_t connector_weight_context_bytes_ = 128ull * 1024ull * 1024ull;
+#if defined(INTPTR_MAX) && (INTPTR_MAX == INT32_MAX)
+    size_t decoder_weight_context_bytes_ = 1024ull * 1024ull * 1024ull;
+#else
     size_t decoder_weight_context_bytes_ = 4096ull * 1024ull * 1024ull;
+#endif
+    int64_t max_history_steps_ = 0;
     assets::TensorStorageType tokenizer_weight_storage_type_ = assets::TensorStorageType::Native;
     assets::TensorStorageType connector_weight_storage_type_ = assets::TensorStorageType::Native;
     assets::TensorStorageType decoder_weight_storage_type_ = assets::TensorStorageType::Native;
@@ -112,12 +117,12 @@ private:
     VibeVoiceASRTextTokenizer tokenizer_;
     VibeVoiceASRFrontend frontend_;
     VibeVoiceASRSpeechEncoder speech_encoder_;
-    VibeVoiceDecoderWeightsRuntime text_decoder_;
+    VibeVoiceQwen2WeightsRuntime text_decoder_;
     VibeVoiceASRPostprocessor postprocessor_;
     std::filesystem::path vad_model_path_;
     std::unique_ptr<runtime::ILoadedVoiceModel> vad_model_;
     std::unique_ptr<runtime::IOfflineVoiceTaskSession> vad_session_;
-    std::unique_ptr<VibeVoiceDecoderCachedState> streaming_decoder_state_;
+    std::unique_ptr<VibeVoiceQwen2CachedState> streaming_decoder_state_;
     runtime::AudioBuffer streaming_audio_buffer_;
     runtime::TaskRequest streaming_request_;
     runtime::TaskResult streaming_result_;

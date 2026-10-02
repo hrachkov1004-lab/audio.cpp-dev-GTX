@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
@@ -25,7 +26,11 @@
 namespace engine::models::echo_tts {
 namespace {
 
+#if defined(INTPTR_MAX) && (INTPTR_MAX == INT32_MAX)
+constexpr size_t kWeightContextBytes = 1024ull * 1024ull * 1024ull;
+#else
 constexpr size_t kWeightContextBytes = 6144ull * 1024ull * 1024ull;
+#endif
 constexpr size_t kGraphArenaBytes = 512ull * 1024ull * 1024ull;
 constexpr float kRopeTheta = 10000.0F;
 
@@ -159,13 +164,13 @@ EchoAdaLnWeights load_adaln(
     return weights;
 }
 
-EchoDitWeights load_dit_weights(
+EchoDiTWeights load_dit_weights(
     const EchoTtsConfig & config,
     core::BackendWeightStore & store,
     const assets::TensorSource & source,
     const std::string & p,
     assets::TensorStorageType storage) {
-    EchoDitWeights w;
+    EchoDiTWeights w;
     const int64_t D = config.model_size;
     const int64_t TD = config.text_model_size;
     const int64_t SD = config.speaker_model_size;
@@ -200,7 +205,7 @@ EchoDitWeights load_dit_weights(
     const int64_t head_dim = config.head_dim();
     for (int64_t i = 0; i < config.num_layers; ++i) {
         const std::string prefix = p + "blocks." + std::to_string(i);
-        EchoDitBlockWeights block;
+        EchoDiTBlockWeights block;
         auto & a = block.attention;
         a.wq = load_linear(store, source, prefix + ".attention.wq", storage, D, D, false);
         a.wk = load_linear(store, source, prefix + ".attention.wk", storage, D, D, false);

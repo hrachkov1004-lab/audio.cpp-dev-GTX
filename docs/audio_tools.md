@@ -2,16 +2,25 @@
 
 | Model | Family | Task(s) | Quick Start |
 |---|---|---|---|
+| Built-in audio utilities | `builtin_audio_utils` | `s2s` denoise/enhance/super-resolution | [Built-in audio utilities](#built-in-audio-utilities) |
+| Smart Turn v3.2 | `smart_turn` | `turn` completion detection | [Smart Turn](models/smart_turn.md) |
+| Apollo | `apollo` | `s2s` music restoration | [Apollo](models/apollo.md) |
+| SAM Audio | `sam_audio` | `s2s` prompt-conditioned separation | [SAM Audio](models/sam_audio.md) |
+| RE-USE | `reuse` | `s2s` speech restoration | [RE-USE](community_models/reuse.md) |
+| Sidon | `sidon` | `s2s` single-speaker speech restoration | [Sidon](models/sidon.md) |
 | AudioSR | `audiosr` | `s2s` audio super-resolution | [AudioSR](#audiosr) |
+| UniverSR | `universr` | `s2s` audio/speech super-resolution | [UniverSR](models/universr.md) |
 | ControlFoley | `controlfoley` | `gen` Foley/SFX generation | [ControlFoley](#controlfoley) |
-| GTCRN | `gtcrn`, `gtcrn_dns3`, `gtcrn_vctk`, `gtcrn_streaming` | framework denoise utility | [GTCRN](#gtcrn) |
+| GTCRN | `gtcrn`, `gtcrn_dns3`, `gtcrn_vctk`, `gtcrn_streaming` | framework denoise utility API | [GTCRN](#gtcrn) |
 | MeanVC2 | `meanvc2` | `vc` | [MeanVC2](#meanvc2) |
+| Tone Color VC | `tone_color_vc` | `vc` | [Tone Color VC](models/tone_color_vc.md) |
 | MioCodec | `miocodec` | `vc`, `s2s` | [MioCodec](#miocodec) |
 | PersonaPlex | `personaplex` | `s2s` | [PersonaPlex](#personaplex) |
 | RVC | `rvc` | `vc` | [RVC](#rvc) |
 | Seed-VC | `seed_vc` | `vc`, `svc` | [Seed-VC](#seed-vc) |
 | VeVo2 | `vevo2` | TTS, SVC, VC, editing | [VeVo2](#vevo2) |
 | MuScriptor | `muscriptor` | audio to MIDI/events | [MuScriptor](#muscriptor) |
+| SheetSage2 | `sheetsage2` | `midi` audio to ABC score | [SheetSage2](#sheetsage2) |
 | HTDemucs | `htdemucs` | `sep` | [HTDemucs](#htdemucs) |
 | BS-RoFormer | `bs_roformer` | `sep` | [BS-RoFormer](#bs-roformer) |
 | Mel-Band RoFormer | `mel_band_roformer` | `sep` | [Mel-Band RoFormer](#mel-band-roformer) |
@@ -27,6 +36,70 @@ Common CLI shape:
 
 ```bash
 audiocpp_cli --task <task> --family <family> --model <model-dir> --backend cuda ...
+```
+
+## Built-in Audio Utilities
+
+The `builtin_audio_utils` family exposes the built-in framework audio utility
+models through the normal CLI and server model-loading path. These utilities do
+require separately downloaded SafeTensors weights; they are not embedded in the
+executable. Pass the weights file or its directory as `--model` and select the
+implementation with `--load-option utility=<utility-id>`. Absolute and relative
+paths are supported; no repository checkout or fixed `assets/` layout is needed.
+
+| Utility id | Operation | Input rate | Output rate |
+|---|---|---:|---:|
+| `deepfilternet2` | Denoise/enhance | 48 kHz | 48 kHz |
+| `rnnoise` | Denoise/enhance | 48 kHz | 48 kHz |
+| `zipenhancer` | Denoise/enhance | 16 kHz | 16 kHz |
+| `gtcrn` | Denoise/enhance, alias for `gtcrn_streaming` | 16 kHz | 16 kHz |
+| `gtcrn_streaming` | Denoise/enhance | 16 kHz | 16 kHz |
+| `gtcrn_dns3` | Denoise/enhance | 16 kHz | 16 kHz |
+| `gtcrn_vctk` | Denoise/enhance | 16 kHz | 16 kHz |
+| `flashsr` | Audio super-resolution | 16 kHz | 48 kHz |
+
+Weights are in [the audio utility assets directory](https://github.com/0xShug0/audio.cpp/tree/main/assets/framework/audio_utilities).
+For DeepFilterNet2, ZipEnhancer, and FlashSR, keep the original weight filename
+inside the selected model directory. RNNoise and GTCRN also accept a weight file
+with a custom filename. Directory loading selects `rnnoise10Gb_15.safetensors`
+for RNNoise and `<utility-id>.safetensors` for the others (`gtcrn` selects
+`gtcrn_streaming.safetensors`).
+
+CLI example (replace the path with your download location):
+
+```bash
+audiocpp_cli --task s2s --family builtin_audio_utils \
+  --model /absolute/path/to/models/rnnoise \
+  --load-option utility=rnnoise \
+  --backend cuda \
+  --audio input.wav \
+  --out enhanced.wav \
+  --log \
+  --log-file rnnoise.log
+```
+
+Server config example:
+
+```json
+{
+  "id": "builtin-rnnoise",
+  "family": "builtin_audio_utils",
+  "path": "/absolute/path/to/models/rnnoise",
+  "load_options": {"utility": "rnnoise"},
+  "task": "s2s",
+  "mode": "offline"
+}
+```
+
+Relative model paths in server configuration are resolved relative to the
+configuration file, not the server's working directory.
+
+Server request example:
+
+```bash
+curl http://127.0.0.1:8080/v1/tasks/run \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"builtin-rnnoise","request":{"audio":"input.wav"}}'
 ```
 
 ## AudioSR
@@ -224,6 +297,21 @@ VeVo2 covers speech, singing, voice conversion, singing conversion, and editing 
 audiocpp_cli --task vc --family vevo2 --model models/VeVo2 --backend cuda --audio source.wav --voice-ref target.wav --out converted.wav
 ```
 
+## SheetSage2
+
+SheetSage2 transcribes music into an ABC score. It uses the `midi` task route but
+writes ABC notation, not a binary MIDI file.
+
+```bash
+audiocpp_cli --task midi --family sheetsage2 \
+  --model models/SheetSage2-GGUF/sheetsage2-orig.gguf \
+  --backend cuda --threads 8 --audio song.wav \
+  --out score.abc --log
+```
+
+Use the original-precision package; Q8 is not supported. The resulting score can
+condition [YuE2](models/yue2.md) through `abc_file` with `cot=melody` or `cot=full`.
+
 ## MuScriptor
 
 MuScriptor is an audio-to-symbolic tool that converts music audio into
@@ -274,6 +362,67 @@ Schema-v1 option compatibility:
 | Legacy/session input | Schema-v1 option | Notes |
 |---|---|---|
 | `weight_type` | `htdemucs.weight_type` | Accepted as a compatibility alias for direct session-option callers. Prefer the family-prefixed form. |
+
+### HTDemucs 6-stem
+
+HTDemucs_6stems extends separation to six stems: drums, bass, vocals, other, guitar, and piano. It uses the same Hybrid Transformer Demucs architecture with a different checkpoint (`5c90dfd2`) that was trained for six-source separation.
+
+The original checkpoint is [`5c90dfd2-34c22ccb.th`](https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/5c90dfd2-34c22ccb.th). The Demucs checkpoint is a PyTorch package rather than a flat tensor file, so first extract it with the existing Demucs converter and then create each GGUF directly from the extracted SafeTensors weights:
+
+```bash
+mkdir -p models/htdemucs_6stems_source models/HTDemucs-6stems-GGUF
+curl -fL \
+  https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/5c90dfd2-34c22ccb.th \
+  -o models/htdemucs_6stems_source/5c90dfd2-34c22ccb.th
+
+python tests/demucs/convert_reference_ckpt.py \
+  --name htdemucs_6s \
+  --repo models/htdemucs_6stems_source \
+  --output-dir models/htdemucs_6stems_source
+
+build/debug/bin/audiocpp_gguf \
+  --input submodel_weights=models/htdemucs_6stems_source/htdemucs_6s/5c90dfd2/model.safetensors \
+  --root models/htdemucs_6stems_source/htdemucs_6s \
+  --family htdemucs_6stems \
+  --model-spec model_specs/htdemucs_6stems.json \
+  --type f16 \
+  --output models/HTDemucs-6stems-GGUF/htdemucs-6stems-f16.gguf
+
+build/debug/bin/audiocpp_gguf \
+  --input submodel_weights=models/htdemucs_6stems_source/htdemucs_6s/5c90dfd2/model.safetensors \
+  --root models/htdemucs_6stems_source/htdemucs_6s \
+  --family htdemucs_6stems \
+  --model-spec model_specs/htdemucs_6stems.json \
+  --type q8_0 \
+  --output models/HTDemucs-6stems-GGUF/htdemucs-6stems-q8_0.gguf
+```
+
+| Field | Value |
+|---|---|
+| Family | `htdemucs_6stems` (alias: `htdemucs_6s`) |
+| Model directory | `models/HTDemucs-6stems-GGUF` |
+| Task | `sep` |
+| Modes | `offline` |
+| Input | 44.1 kHz music mixture WAV through `--audio` |
+| Output | Stem files under `--out-dir` |
+| Stems | Drums, bass, vocals, other, guitar, piano |
+
+```bash
+audiocpp_cli --task sep --family htdemucs_6stems --model models/HTDemucs-6stems-GGUF/htdemucs-6stems-q8_0.gguf --backend cuda --audio song_44k.wav --out-dir stems_6
+```
+
+| Option | Values | Default | Meaning |
+|---|---|---:|---|
+| `--audio` | 44.1 kHz WAV path | required | Input music mixture. |
+| `--out-dir` | directory | required | Directory for separated stems. |
+| `--backend` | `cpu`, `cuda`, `vulkan`, `metal`, `best` | `cpu` | Compute backend. |
+| `--session-option htdemucs_6stems.weight_type=<type>` | `native`, `f32`, `f16`, `bf16`, `q8_0` | backend-dependent | Weight storage type. Defaults to `f32` for host graph planning, `f16` on CUDA, and `native` otherwise. |
+
+Schema-v1 option compatibility:
+
+| Legacy/session input | Schema-v1 option | Notes |
+|---|---|---|
+| `weight_type` | `htdemucs_6stems.weight_type` | Accepted as a compatibility alias for direct session-option callers. Prefer the family-prefixed form. |
 
 ## BS-RoFormer
 

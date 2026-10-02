@@ -4,6 +4,7 @@
 #include "engine/framework/debug/profiler.h"
 #include "engine/framework/debug/trace.h"
 #include "engine/framework/runtime/options.h"
+#include "engine/framework/runtime/partial_text.h"
 #include "engine/framework/sampling/torch_random.h"
 #include "engine/models/silero_vad/session.h"
 
@@ -13,6 +14,7 @@
 #include <chrono>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <limits>
@@ -31,7 +33,11 @@ namespace {
 using Clock = std::chrono::steady_clock;
 constexpr size_t kDefaultTokenizerWeightContextBytes = 512ull * 1024ull * 1024ull;
 constexpr size_t kDefaultConnectorWeightContextBytes = 128ull * 1024ull * 1024ull;
+#if defined(INTPTR_MAX) && (INTPTR_MAX == INT32_MAX)
+constexpr size_t kDefaultDecoderWeightContextBytes = 1024ull * 1024ull * 1024ull;
+#else
 constexpr size_t kDefaultDecoderWeightContextBytes = 4096ull * 1024ull * 1024ull;
+#endif
 constexpr double kDefaultAudioChunkSeconds = 20.0 * 60.0;
 constexpr int64_t kDefaultStreamingMaxTokensPerChunk = 256;
 constexpr int64_t kStreamingDecoderInitialCacheSteps = 1024;
@@ -99,6 +105,7 @@ bool is_allowed_session_option(const std::string & key) {
         ".tokenizer_weight_context_mb",
         ".connector_weight_context_mb",
         ".decoder_weight_context_mb",
+        ".max_history_steps",
         ".vad_model_path",
     };
     for (const char * prefix_value : {"vibevoice_asr", "vibevoice_asr_streaming"}) {
@@ -124,31 +131,20 @@ runtime::AudioBuffer pad_audio_tail(runtime::AudioBuffer audio, int64_t target_f
     return audio;
 }
 
-size_t common_prefix_size(const std::string & lhs, const std::string & rhs) {
-    const size_t limit = std::min(lhs.size(), rhs.size());
-    size_t size = 0;
-    while (size < limit && lhs[size] == rhs[size]) {
-        ++size;
-    }
-    return size;
-}
-
 void emit_transcript_delta(
     const runtime::StreamEventCallback & sink,
     const runtime::Transcript & transcript,
-    std::string & emitted_text) {
+    runtime::PartialTextPublisher & partials) {
     if (!sink || transcript.text.empty()) {
         return;
     }
-    const size_t prefix_size = common_prefix_size(emitted_text, transcript.text);
-    if (prefix_size == transcript.text.size()) {
-        emitted_text = transcript.text;
+    std::string delta = partials.publish(transcript.text);
+    if (delta.empty()) {
         return;
     }
     runtime::StreamEvent event;
-    event.partial_text = runtime::Transcript{transcript.text.substr(prefix_size), transcript.language};
+    event.partial_text = runtime::Transcript{std::move(delta), transcript.language};
     sink(event);
-    emitted_text = transcript.text;
 }
 
 std::string append_streaming_transcript(
@@ -547,6 +543,7 @@ VibeVoiceASRSession::VibeVoiceASRSession(
       tokenizer_weight_context_bytes_(runtime::parse_size_mb_option(options.options, {"vibevoice_asr_streaming.tokenizer_weight_context_mb", "vibevoice_asr.tokenizer_weight_context_mb"}, kDefaultTokenizerWeightContextBytes)),
       connector_weight_context_bytes_(runtime::parse_size_mb_option(options.options, {"vibevoice_asr_streaming.connector_weight_context_mb", "vibevoice_asr.connector_weight_context_mb"}, kDefaultConnectorWeightContextBytes)),
       decoder_weight_context_bytes_(runtime::parse_size_mb_option(options.options, {"vibevoice_asr_streaming.decoder_weight_context_mb", "vibevoice_asr.decoder_weight_context_mb"}, kDefaultDecoderWeightContextBytes)),
+      max_history_steps_(runtime::parse_i64_option(options.options, {"vibevoice_asr_streaming.max_history_steps", "vibevoice_asr.max_history_steps"}).value_or(0)),
       tokenizer_weight_storage_type_(option_weight_type(
           options,
           {"vibevoice_asr_streaming.tokenizer_weight_type", "vibevoice_asr.tokenizer_weight_type"},
@@ -588,7 +585,8 @@ VibeVoiceASRSession::VibeVoiceASRSession(
           options.backend.threads,
           decoder_weight_context_bytes_,
           128ull * 1024ull * 1024ull,
-          decoder_weight_storage_type_),
+          decoder_weight_storage_type_,
+          max_history_steps_),
       postprocessor_(tokenizer_),
       vad_model_path_(runtime::find_option(options.options, {"vibevoice_asr_streaming.vad_model_path", "vibevoice_asr.vad_model_path"}).value_or(default_vad_model_path().string())) {
     if (task_.task != runtime::VoiceTaskKind::Asr) {
@@ -603,6 +601,10 @@ VibeVoiceASRSession::VibeVoiceASRSession(
     validate_weight_storage(tokenizer_weight_storage_type_, "vibevoice_asr.tokenizer_weight_type");
     validate_weight_storage(connector_weight_storage_type_, "vibevoice_asr.connector_weight_type");
     validate_weight_storage(decoder_weight_storage_type_, "vibevoice_asr.decoder_weight_type");
+    if (max_history_steps_ > assets_->config.decoder.max_position_embeddings) {
+        throw std::runtime_error(
+            "vibevoice_asr_streaming.max_history_steps exceeds the model position capacity");
+    }
     for (const auto & [key, value] : options.options) {
         (void)value;
         if (!is_allowed_session_option(key) &&
@@ -1058,7 +1060,7 @@ VibeVoiceASRSpeechFeatures VibeVoiceASRSession::encode_streaming_chunk(
 
 VibeVoiceDecoderResult VibeVoiceASRSession::append_stream_embedding(
     const std::vector<float> & embedding,
-    VibeVoiceDecoderCachedState & state,
+    VibeVoiceQwen2CachedState & state,
     int64_t & steps) {
     const int64_t cache_capacity = streaming_decoder_cache_capacity(
         assets_->config.decoder.max_position_embeddings,
@@ -1071,7 +1073,7 @@ VibeVoiceDecoderResult VibeVoiceASRSession::append_stream_embedding(
 VibeVoiceDecoderResult VibeVoiceASRSession::append_stream_suffix(
     const std::vector<float> & embeddings,
     int64_t steps_to_append,
-    VibeVoiceDecoderCachedState & state,
+    VibeVoiceQwen2CachedState & state,
     int64_t & steps) {
     if (steps_to_append <= 0) {
         throw std::runtime_error("VibeVoice-ASR streaming suffix requires positive steps");
@@ -1094,8 +1096,9 @@ void VibeVoiceASRSession::ensure_streaming_decoder_state(const VibeVoiceASRReque
     const auto prompt_ids = tokenizer_.build_streaming_prompt(request.context);
     const auto prompt_embeddings = text_decoder_.embed_tokens(prompt_ids);
     streaming_history_steps_ = prompt_embeddings.steps;
+    text_decoder_.set_pinned_prefix_steps(prompt_embeddings.steps);
     auto prefill = text_decoder_.prefill_embeddings(prompt_embeddings.values, streaming_history_steps_);
-    streaming_decoder_state_ = std::make_unique<VibeVoiceDecoderCachedState>();
+    streaming_decoder_state_ = std::make_unique<VibeVoiceQwen2CachedState>();
     text_decoder_.reset_cached_state(*streaming_decoder_state_, std::move(prefill.state));
     text_decoder_.prepare_cached_state(
         *streaming_decoder_state_,
@@ -1106,7 +1109,7 @@ void VibeVoiceASRSession::ensure_streaming_decoder_state(const VibeVoiceASRReque
 std::string VibeVoiceASRSession::generate_streaming_text_chunk(
     const VibeVoiceASRRequest & request,
     VibeVoiceDecoderResult next_logits,
-    VibeVoiceDecoderCachedState & state,
+    VibeVoiceQwen2CachedState & state,
     int64_t & steps) {
     std::vector<int32_t> generated;
     generated.reserve(static_cast<size_t>(std::min<int64_t>(request.generation.max_new_tokens, 256)));
@@ -1276,9 +1279,11 @@ runtime::TaskResult VibeVoiceASRSession::run_single(const VibeVoiceASRRequest & 
     const auto prompt_end = Clock::now();
 
     const auto decoder_start = Clock::now();
+    // Single-shot prompts embed the whole input; nothing is pinned here.
+    text_decoder_.set_pinned_prefix_steps(0);
     auto prefill = text_decoder_.prefill_prompt(prompt.input_ids, speech.values, prompt.speech_positions);
     const uint64_t rng_call_offset = (speech.next_rng_index + 3ull) / 4ull;
-    std::string emitted_text;
+    runtime::PartialTextPublisher partials;
     std::function<void(const std::vector<int32_t> &)> token_callback;
     if (task_.mode == runtime::RunMode::Streaming && stream_event_sink_ != nullptr) {
         token_callback = [&](const std::vector<int32_t> & partial_tokens) {
@@ -1287,7 +1292,7 @@ runtime::TaskResult VibeVoiceASRSession::run_single(const VibeVoiceASRRequest & 
             emit_transcript_delta(
                 stream_event_sink_,
                 runtime::Transcript{partial_text, request.language},
-                emitted_text);
+                partials);
         };
     }
     auto generated = generate_tokens(request, prompt, std::move(prefill), rng_call_offset, token_callback);
@@ -1299,7 +1304,7 @@ runtime::TaskResult VibeVoiceASRSession::run_single(const VibeVoiceASRRequest & 
         emit_transcript_delta(
             stream_event_sink_,
             runtime::Transcript{decoded.text, request.language},
-            emitted_text);
+            partials);
     }
     const auto post_end = Clock::now();
 
@@ -1347,7 +1352,7 @@ std::vector<int32_t> VibeVoiceASRSession::generate_greedy_or_sample(
     VibeVoiceDecoderPrefillOutput prefill,
     uint64_t rng_call_offset,
     const std::function<void(const std::vector<int32_t> &)> & token_callback) {
-    VibeVoiceDecoderCachedState state;
+    VibeVoiceQwen2CachedState state;
     text_decoder_.reset_cached_state(state, std::move(prefill.state));
     std::vector<int32_t> generated;
     generated.reserve(static_cast<size_t>(std::min<int64_t>(request.generation.max_new_tokens, 4096)));
@@ -1396,7 +1401,7 @@ std::vector<int32_t> VibeVoiceASRSession::generate_beam(
     const std::function<void(const std::vector<int32_t> &)> & token_callback) {
     struct Beam {
         std::vector<int32_t> generated;
-        std::unique_ptr<VibeVoiceDecoderCachedState> state;
+        std::unique_ptr<VibeVoiceQwen2CachedState> state;
         double score = 0.0;
         bool done = false;
     };
@@ -1423,7 +1428,7 @@ std::vector<int32_t> VibeVoiceASRSession::generate_beam(
     for (const auto & item : first) {
         Beam beam;
         beam.generated.push_back(item.token);
-        beam.state = std::make_unique<VibeVoiceDecoderCachedState>();
+        beam.state = std::make_unique<VibeVoiceQwen2CachedState>();
         text_decoder_.reset_cached_state(*beam.state, prefill.state);
         beam.score = item.log_prob;
         beam.done = item.token == tokenizer_.eos_id();
@@ -1507,13 +1512,13 @@ std::vector<int32_t> VibeVoiceASRSession::generate_beam(
         for (auto & candidate : candidates) {
             ++parent_use_count[candidate.parent];
         }
-        std::vector<std::vector<std::unique_ptr<VibeVoiceDecoderCachedState>>> cloned_parent_states(beams.size());
+        std::vector<std::vector<std::unique_ptr<VibeVoiceQwen2CachedState>>> cloned_parent_states(beams.size());
         for (size_t parent = 0; parent < beams.size(); ++parent) {
             if (parent_use_count[parent] > 1 && beams[parent].state != nullptr) {
                 auto & clones = cloned_parent_states[parent];
                 clones.reserve(parent_use_count[parent] - 1);
                 for (size_t clone = 1; clone < parent_use_count[parent]; ++clone) {
-                    auto state = std::make_unique<VibeVoiceDecoderCachedState>();
+                    auto state = std::make_unique<VibeVoiceQwen2CachedState>();
                     const int64_t cache_capacity = prompt_tokens +
                         static_cast<int64_t>(beams[parent].generated.size()) + 1;
                     text_decoder_.clone_cached_state(*beams[parent].state, *state, cache_capacity);
